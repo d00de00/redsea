@@ -1732,7 +1732,7 @@
 
             buildMarkerIcon(label, icon) {
                 const safe = this.esc(label);
-                const isDepth = /^-?\d+([.,]\d+)?$/.test(String(label).trim());
+                const isDepth = icon === 'depth' || /^-?\d+([.,]\d+)?$/.test(String(label).trim());
                 const hasArabic = /[\u0600-\u06FF]/.test(String(label));
                 const textShadow = '-1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff';
 
@@ -1919,22 +1919,36 @@
                 reader.onload = (e) => {
                     try {
                         const geojsonData = JSON.parse(e.target.result);
+                        const typeColors = {
+                            '0x0102': '#cba274', '0x102': '#cba274',
+                            '0x0304': '#1296e6', '0x304': '#1296e6',
+                            '0x0305': '#46bbe7', '0x305': '#46bbe7'
+                        };
                         const layerGroup = L.geoJSON(geojsonData, {
-                            style: { color: '#ffd100', weight: 2, opacity: 0.9 },
+                            style: (feature) => {
+                                const props = feature.properties || {};
+                                const t = String(props.type || props.Type || '').trim().toLowerCase();
+                                const c = typeColors[t] || '#ffd100';
+                                return { color: c, fillColor: c, weight: 2, opacity: 0.9, fillOpacity: 0.55 };
+                            },
                             pointToLayer: (feature, latlng) => {
                                 const props = feature.properties || {};
-                                const label = props.name || props.label || '';
+                                const label = props.name || props.label || props.Label || '';
+                                const t = String(props.type || props.Type || '').trim().toLowerCase();
                                 let icon = props.icon;
                                 const smType = props.seamark_type || props['seamark:type'];
                                 
-                                if (smType === 'rock' || smType === 'Rock') {
+                                if (t === '0x0700' || t === '0x700') {
+                                    icon = 'depth';
+                                } else if (smType === 'rock' || smType === 'Rock') {
                                     icon = '*';
                                 }
                                 return L.marker(latlng, { icon: this.buildMarkerIcon(label, icon) });
                             },
                             onEachFeature: (feature, layer) => {
-                                if (feature.properties && (feature.properties.name || feature.properties.label)) {
-                                    layer.bindPopup(`<div dir="rtl" class="text-xs font-bold">${this.esc(feature.properties.name || feature.properties.label)}</div>`);
+                                const p = feature.properties;
+                                if (p && (p.name || p.label || p.Label)) {
+                                    layer.bindPopup(`<div dir="rtl" class="text-xs font-bold">${this.esc(p.name || p.label || p.Label)}</div>`);
                                 }
                             }
                         });
@@ -2024,6 +2038,12 @@
                 
                 const mapLayerGroup = L.featureGroup();
 
+                const typeColors = {
+                    '0x0102': '#cba274', '0x102': '#cba274',
+                    '0x0304': '#1296e6', '0x304': '#1296e6',
+                    '0x0305': '#46bbe7', '0x305': '#46bbe7'
+                };
+
                 const parseCoords = (raw) => {
                     const re = /\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)/g;
                     const pts = [];
@@ -2040,10 +2060,11 @@
                     const dataKeys = Object.keys(attrs).filter(k => /^Data\d+$/i.test(k));
                     if (!dataKeys.length) return;
                     const label = (attrs['Label'] || '').trim();
-                    const type = (attrs['Type'] || '').toLowerCase();
+                    const type = (attrs['Type'] || '').trim().toLowerCase();
                     const isPoint = sec === 'POI' || sec === 'RGN10' || sec === 'RGN20';
                     const isLine = sec === 'POLYLINE' || sec === 'RGN40';
                     const isPoly = sec === 'POLYGON' || sec === 'RGN80';
+                    const isDepthType = type === '0x0700' || type === '0x700';
                     
                     if (isPoint) {
                         if (!label) return;
@@ -2053,7 +2074,9 @@
                         let icon = null;
                         const smType = attrs['seamark_type'] || attrs['seamark:type'];
 
-                        if (attrs.__icon) {
+                        if (isDepthType) {
+                            icon = 'depth';
+                        } else if (attrs.__icon) {
                             icon = attrs.__icon;
                         } else if (label.includes('صخر') || label.includes('*') || label.includes('خطر') || label.includes('شعب') || smType === 'rock' || smType === 'Rock') {
                             icon = '*';
@@ -2068,8 +2091,9 @@
                     } else if (isLine || isPoly) {
                         const pts = parseCoords(attrs[dataKeys[0]]);
                         if (pts.length < 2) return;
-                        if (isLine) L.polyline(pts, { color: '#ffd100', weight: 2, opacity: 0.9 }).addTo(mapLayerGroup);
-                        else L.polygon(pts, { color: '#ffd100', weight: 1.5, fillColor: '#ffd100', fillOpacity: 0.15 }).addTo(mapLayerGroup);
+                        const color = typeColors[type] || '#ffd100';
+                        if (isLine) L.polyline(pts, { color: color, weight: 2, opacity: 0.9 }).addTo(mapLayerGroup);
+                        else L.polygon(pts, { color: color, weight: 1.5, fillColor: color, fillOpacity: 0.55 }).addTo(mapLayerGroup);
                         shapes++;
                     }
                 };
