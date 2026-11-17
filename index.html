@@ -528,7 +528,7 @@
                 <p class="text-[10px] text-amber-200 leading-relaxed">
                     ⚠️ لا يغني عن الخرائط الملاحية الرسمية ومعدات السلامة.
                 </p>
-                <div class="text-[10px] text-sky-300 font-bold pt-1">الإصدار: 1.8.5 (مدير خرائط متكامل)</div>
+                <div class="text-[10px] text-sky-300 font-bold pt-1">الإصدار: 1.8.6 (ملاحة متقدمة وتنبيهات)</div>
             </div>
             <button onclick="app.openMenu()" class="w-full bg-slate-700 hover:bg-slate-600 text-white font-bold py-2 rounded-xl text-xs transition">عودة للقائمة</button>
         </div>
@@ -555,7 +555,6 @@
                 </div>
                 <hr class="border-white/20 my-3">
                 
-                <!-- ✅ قائمة الخرائط المرفوعة لإدارتها واستعراضها -->
                 <div id="uploadedMapsList" class="flex flex-col gap-2 max-h-36 overflow-y-auto no-scrollbar mb-3">
                     <div class="text-[10px] text-sky-200 text-center py-2">لا توجد خرائط إضافية مرفوعة.</div>
                 </div>
@@ -618,7 +617,7 @@
             markerLayerGroup: null,
             measureLayerGroup: null,
             trackLayerGroup: null,
-            uploadedMaps: {}, // ✅ سجل الخرائط المرفوعة
+            uploadedMaps: {},
             refPoint: [21.008971, 39.255416],
             homePort: [21.008971, 39.255416],
             compassActive: false,
@@ -639,6 +638,7 @@
             userAccuracyCircle: null,
             currentUserLatLng: null,
             smoothSpeedMs: null,
+            wakeLock: null,
 
             measureActive: false,
             measurePoints: [],
@@ -675,6 +675,8 @@
                 this.updateHud();
                 this.updateWeather();
                 this.initPwaServiceWorker();
+                this.requestWakeLock();
+
                 const voyageSpeedInput = document.getElementById('voyageSpeed');
                 if (voyageSpeedInput) voyageSpeedInput.addEventListener('input', () => this.updateVoyageDetails());
 
@@ -683,6 +685,38 @@
                         if (e.target === ov) this.closeAllModals();
                     });
                 });
+
+                document.addEventListener('visibilitychange', () => {
+                    if (document.visibilityState === 'visible') {
+                        this.requestWakeLock();
+                    }
+                });
+            },
+
+            async requestWakeLock() {
+                if ('wakeLock' in navigator) {
+                    try {
+                        this.wakeLock = await navigator.wakeLock.request('screen');
+                    } catch (err) {
+                        console.warn('Wake Lock error:', err);
+                    }
+                }
+            },
+
+            playProximityAlert() {
+                try {
+                    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    const osc = audioCtx.createOscillator();
+                    const gain = audioCtx.createGain();
+                    osc.type = 'sine';
+                    osc.frequency.setValueAtTime(880, audioCtx.currentTime); // نون عالي
+                    gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.6);
+                    osc.connect(gain);
+                    gain.connect(audioCtx.destination);
+                    osc.start();
+                    osc.stop(audioCtx.currentTime + 0.6);
+                } catch (e) {}
             },
 
             esc(s) {
@@ -778,7 +812,6 @@
                 this.updateEta(meters, !!target);
             },
 
-            // الوقت المقدر للوصول: السرعة الحية (GPS) إن كانت كافية، وإلا سرعة أمر الإبحار المخططة
             updateEta(meters, hasVoyage) {
                 const el = document.getElementById('etaText');
                 if (!el) return;
@@ -1415,7 +1448,10 @@
                 this.routeLayerGroup.clearLayers();
                 if (!this.voyageDestination || !this.voyageOrigin) return;
                 this.voyageLine = L.polyline([this.voyageOrigin, this.voyageDestination], { color: '#ff7b00', weight: 5, dashArray: '10, 7' }).addTo(this.routeLayerGroup);
-                this.voyageMarker = L.marker(this.voyageDestination).bindPopup('<b>وجهة الإبحار</b>').addTo(this.routeLayerGroup);
+                
+                // تم إزالة علامة الماركر الزرقاء المتداخلة للوجهة بناءً على طلبك لكي لا تغطي على السهم
+                // وإذا أردت فقط رسماً لخط الوجهة، الخط يوضح خط النهاية بوضوح دون تداخل أيقونة فوقه.
+
                 this.map.fitBounds([this.voyageOrigin, this.voyageDestination], { padding: [60, 60], maxZoom: 14 });
             },
 
@@ -1503,11 +1539,14 @@
             checkProximityToCenter(userLat, userLng) {
                 if (!this.voyageDestination) return;
                 const distanceMeters = this.map.distance([userLat, userLng], this.voyageDestination);
-                if (distanceMeters <= 150 && !this.voyageArrivalWarned) {
+                
+                // تنبيه الاقتراب بداية من 100 متر
+                if (distanceMeters <= 100 && !this.voyageArrivalWarned) {
                     this.voyageArrivalWarned = true;
-                    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
-                    this.showToast(`🏁 وصلت إلى نطاق الوجهة — متبقٍ ${Math.round(distanceMeters)} متر`);
-                } else if (distanceMeters > 250) {
+                    if (navigator.vibrate) navigator.vibrate([300, 150, 300, 150, 300]);
+                    this.playProximityAlert();
+                    this.showToast(`🚨 تنبيه: الاقتراب من نقطة الوصول — متبقٍ ${Math.round(distanceMeters)} متر`);
+                } else if (distanceMeters > 150) {
                     this.voyageArrivalWarned = false;
                 }
             },
@@ -1536,13 +1575,16 @@
                         document.getElementById('navCourse').innerHTML = `<i class="fa-solid fa-compass text-sky-600"></i> ${courseStr}`;
                         this.updateRemainingDistanceToCenter();
 
-                        const boatIconHtml = `<div class="w-8 h-8 bg-[#0092da] border-2 border-white rounded-full flex items-center justify-center text-white shadow-xl animate-pulse" style="transform: rotate(${heading || 0}deg)"><i class="fa-solid fa-location-arrow text-xs"></i></div>`;
+                        // سهم أكبر حجماً ومضبوط في الاتجاه الصحيح بناءً على heading
+                        const arrowRotation = heading != null && !isNaN(heading) ? heading : 0;
+                        const boatIconHtml = `<div style="width: 44px; height: 44px; transform: rotate(${arrowRotation}deg); transform-origin: center; display: flex; align-items: center; justify-content: center;"><div style="width: 40px; height: 40px; background: #0092da; border: 3px solid #ffffff; border-radius: 50%; box-shadow: 0 4px 10px rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center;"><i class="fa-solid fa-location-arrow" style="color: #ffffff; font-size: 18px; transform: rotate(-45deg);"></i></div></div>`;
+
                         if (!this.userLocationMarker) {
-                            const boatIcon = L.divIcon({ className: '', html: boatIconHtml, iconSize: [32, 32], iconAnchor: [16, 16] });
+                            const boatIcon = L.divIcon({ className: '', html: boatIconHtml, iconSize: [44, 44], iconAnchor: [22, 22] });
                             this.userLocationMarker = L.marker([lat, lng], { icon: boatIcon }).addTo(this.map);
                         } else {
                             this.userLocationMarker.setLatLng([lat, lng]);
-                            this.userLocationMarker.setIcon(L.divIcon({ className: '', html: boatIconHtml, iconSize: [32, 32], iconAnchor: [16, 16] }));
+                            this.userLocationMarker.setIcon(L.divIcon({ className: '', html: boatIconHtml, iconSize: [44, 44], iconAnchor: [22, 22] }));
                         }
                         this.userLocationMarker.bindPopup(`<b>موقعك المباشر</b><br>السرعة: ${speedKmh} كم/س<br>الدقة: ${Math.round(accuracy)} م`);
 
@@ -1576,7 +1618,6 @@
                     (error) => {
                         if (locateBtn) locateBtn.classList.remove('circle-active');
                         if (error.code !== 1) {
-                            // انتهاء المهلة أو ضعف الإشارة: نُبقي المراقبة والتسجيل يعملان
                             this.showToast('⚠️ إشارة GPS ضعيفة، جاري إعادة المحاولة...');
                             return;
                         }
@@ -1612,9 +1653,6 @@
                 this.updateRemainingDistanceToCenter();
             },
 
-            // ======================================
-            // إدراة الخرائط المرفوعة (JSON/SQLite/MP)
-            // ======================================
             addUploadedMap(name, layer) {
                 const id = 'map_' + Date.now() + Math.floor(Math.random() * 1000);
                 this.uploadedMaps[id] = { name, layer, visible: true };
@@ -1681,7 +1719,6 @@
                 });
                 container.innerHTML = html;
             },
-
 
             addEditableMarkerFromCenter() {
                 const center = this.map.getCenter();
@@ -1861,8 +1898,6 @@
                 if (!file) return;
 
                 const ext = file.name.split('.').pop().toLowerCase();
-                
-                // نترك النافذة مفتوحة ليرى المستخدم الخريطة تمت إضافتها للقائمة
 
                 if (ext === 'json' || ext === 'geojson') {
                     this.readJsonFile(file);
