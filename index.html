@@ -2,7 +2,7 @@
 <html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>redsea | PWA Chartplotter</title>
 
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -25,7 +25,7 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
-    
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
 
     <style>
@@ -189,6 +189,20 @@
             transition: opacity 0.5s ease;
         }
 
+        /* إسناد Esri — صغير ومرفوع فوق أزرار التكبير */
+        .leaflet-control-attribution {
+            font-size: 9px !important;
+            background: rgba(255, 255, 255, 0.8) !important;
+            padding: 1px 5px !important;
+            border-radius: 4px !important;
+            color: #333 !important;
+            font-family: 'Cairo', sans-serif !important;
+        }
+        .leaflet-bottom.leaflet-right {
+            bottom: calc(170px + var(--sab)) !important;
+            right: calc(8px + var(--sar)) !important;
+        }
+
         @media (max-height: 600px) {
             .circle-tool-btn { width: 40px; height: 40px; }
             .top-sq-btn { width: 40px; height: 40px; }
@@ -251,7 +265,7 @@
                 <span id="navCourse" class="font-black text-xs flex items-center gap-1"><i class="fa-solid fa-compass text-sky-600"></i> --°</span>
             </div>
         </div>
-        <div class="info-pill cursor-pointer flex flex-col gap-1" style="color: #1e3a6e;" onclick="app.updateWeather()" title="انقر لتحديث الطقس">
+        <div class="info-pill cursor-pointer flex flex-col gap-1" style="color: #1e3a6e;" onclick="app.updateWeather(true)" title="انقر لتحديث الطقس">
             <div class="flex justify-around items-center w-full">
                 <div class="flex flex-col items-center">
                     <span class="text-[9px] text-gray-600 font-bold uppercase leading-none mb-1">الحرارة</span>
@@ -457,7 +471,7 @@
                             <tr class="bg-[#19396f] text-sky-200 border-b border-white/20 text-[11px]">
                                 <th class="p-2 font-bold">التاريخ / اليوم</th>
                                 <th class="p-2 font-bold">المد والجزر</th>
-                                <th class="p-2 font-bold">الشروق / الغروب</th>
+                                <th class="p-2 font-bold">الشروق / الغروب<br><span class="text-[9px] font-normal opacity-75">(بتوقيت جهازك)</span></th>
                                 <th class="p-2 font-bold">أطوار القمر</th>
                                 <th class="p-2 font-bold">الضغط والتقييم</th>
                             </tr>
@@ -528,7 +542,7 @@
                 <p class="text-[10px] text-amber-200 leading-relaxed">
                     ⚠️ لا يغني عن الخرائط الملاحية الرسمية ومعدات السلامة.
                 </p>
-                <div class="text-[10px] text-sky-300 font-bold pt-1">الإصدار: 1.8.6 (ملاحة متقدمة وتنبيهات)</div>
+                <div class="text-[10px] text-sky-300 font-bold pt-1">الإصدار: 1.9.0 (ملاحة متقدمة وتنبيهات)</div>
             </div>
             <button onclick="app.openMenu()" class="w-full bg-slate-700 hover:bg-slate-600 text-white font-bold py-2 rounded-xl text-xs transition">عودة للقائمة</button>
         </div>
@@ -554,7 +568,7 @@
                     <button onclick="app.switchBaseMap('hybrid')" id="btn-hybrid" class="border-2 text-white font-bold py-2 px-1 rounded-xl shadow transition text-center text-[11px]">🌐 المشتركة</button>
                 </div>
                 <hr class="border-white/20 my-3">
-                
+
                 <div id="uploadedMapsList" class="flex flex-col gap-2 max-h-36 overflow-y-auto no-scrollbar mb-3">
                     <div class="text-[10px] text-sky-200 text-center py-2">لا توجد خرائط إضافية مرفوعة.</div>
                 </div>
@@ -633,6 +647,7 @@
             voyageMarker: null,
             voyageArrivalWarned: false,
             routeLayerGroup: null,
+            savedRouteLayerGroup: null,
             savedRouteLayers: {},
             userLocationMarker: null,
             userAccuracyCircle: null,
@@ -654,11 +669,18 @@
             liveWatchId: null,
             gpsActive: false,
             autoFollow: true,
-            lastProximityWarningTime: 0,
+            _audioCtx: null,
+            _weatherCache: null,
 
             MODAL_IDS: ['mainMenuModal', 'tidesModal', 'locationsModal', 'safeRoutesModal', 'aboutModal', 'mpModal', 'installGuideModal', 'voyageModal'],
 
             init() {
+                this.handleOrientation = this.handleOrientation.bind(this);
+                // فتح AudioContext على أول إيماءة (متطلب iOS)
+                const unlockAudio = () => this._getAudioCtx();
+                document.addEventListener('touchstart', unlockAudio, { once: true, passive: true });
+                document.addEventListener('click', unlockAudio, { once: true });
+
                 setTimeout(() => {
                     const splash = document.getElementById('splashScreen');
                     if (splash) {
@@ -703,13 +725,26 @@
                 }
             },
 
+            _getAudioCtx() {
+                if (!this._audioCtx) {
+                    try {
+                        this._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    } catch (e) { return null; }
+                }
+                if (this._audioCtx.state === 'suspended') {
+                    this._audioCtx.resume().catch(() => {});
+                }
+                return this._audioCtx;
+            },
+
             playProximityAlert() {
+                const audioCtx = this._getAudioCtx();
+                if (!audioCtx) return;
                 try {
-                    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                     const osc = audioCtx.createOscillator();
                     const gain = audioCtx.createGain();
                     osc.type = 'sine';
-                    osc.frequency.setValueAtTime(880, audioCtx.currentTime); // نون عالي
+                    osc.frequency.setValueAtTime(880, audioCtx.currentTime);
                     gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
                     gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.6);
                     osc.connect(gain);
@@ -754,23 +789,25 @@
                     center: [21.008971, 39.255416],
                     zoom: 12,
                     zoomControl: false,
-                    attributionControl: false,
+                    attributionControl: true,
                     preferCanvas: true,
                     tap: true
                 });
 
-                const oceanOpts = { maxZoom: 17, maxNativeZoom: 13 };
-                const imgOpts = { maxZoom: 17, maxNativeZoom: 17 };
+                const oceanBaseOpts = { maxZoom: 17, maxNativeZoom: 13, attribution: '© Esri, GEBCO, NOAA' };
+                const oceanRefOpts  = { maxZoom: 17, maxNativeZoom: 13, attribution: '© Esri' };
+                const imageryOpts   = { maxZoom: 17, maxNativeZoom: 17, attribution: '© Esri, Maxar, Earthstar Geographics' };
+                const transportOpts = { maxZoom: 17, maxNativeZoom: 17, attribution: '© Esri, HERE, Garmin' };
 
                 this.baseLayers = {
                     ocean: L.layerGroup([
-                        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}', oceanOpts),
-                        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Reference/MapServer/tile/{z}/{y}/{x}', oceanOpts)
+                        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}', oceanBaseOpts),
+                        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Reference/MapServer/tile/{z}/{y}/{x}', oceanRefOpts)
                     ]),
-                    satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', imgOpts),
+                    satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', imageryOpts),
                     hybrid: L.layerGroup([
-                        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', imgOpts),
-                        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}', imgOpts)
+                        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', imageryOpts),
+                        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}', transportOpts)
                     ])
                 };
 
@@ -779,13 +816,14 @@
                 this.measureLayerGroup = L.featureGroup().addTo(this.map);
                 this.trackLayerGroup = L.featureGroup().addTo(this.map);
                 this.routeLayerGroup = L.featureGroup().addTo(this.map);
+                this.savedRouteLayerGroup = L.featureGroup().addTo(this.map);
 
                 this.map.on('move', () => this.scheduleHudUpdate());
                 this.map.on('zoomend', () => this.scheduleHudUpdate());
                 this.map.on('moveend', () => {
                     this.scheduleHudUpdate();
                     clearTimeout(this.weatherTimeout);
-                    this.weatherTimeout = setTimeout(() => this.updateWeather(), 800);
+                    this.weatherTimeout = setTimeout(() => this.updateWeather(false), 3000);
                 });
                 this.map.on('dragstart', () => {
                     if (this.gpsActive) this.autoFollow = false;
@@ -903,10 +941,10 @@
             },
 
             addSavedRouteLayer(name, pts) {
-                if (this.savedRouteLayers[name]) this.measureLayerGroup.removeLayer(this.savedRouteLayers[name]);
+                if (this.savedRouteLayers[name]) this.savedRouteLayerGroup.removeLayer(this.savedRouteLayers[name]);
                 this.savedRouteLayers[name] = L.polyline(pts, { color: '#ffd100', weight: 4, opacity: 0.9 })
                     .bindPopup(`<b>مسار: ${this.esc(name)}</b><br>الطول: ${this.fmtDist(this.pathLength(pts))}`)
-                    .addTo(this.measureLayerGroup);
+                    .addTo(this.savedRouteLayerGroup);
             },
 
             setHomePortHere() {
@@ -952,17 +990,28 @@
                 }
             },
 
-            async updateWeather() {
+            async updateWeather(force = false) {
                 const center = this.map.getCenter();
-                const lat = center.lat.toFixed(4);
-                const lng = center.lng.toFixed(4);
+                const lat = Number(center.lat.toFixed(2));
+                const lng = Number(center.lng.toFixed(2));
+                const now = Date.now();
+                // كاش 60 ثانية لكل خلية ~1كم
+                if (!force && this._weatherCache &&
+                    this._weatherCache.lat === lat &&
+                    this._weatherCache.lng === lng &&
+                    now - this._weatherCache.time < 60000) {
+                    return;
+                }
+                const latStr = center.lat.toFixed(4);
+                const lngStr = center.lng.toFixed(4);
                 const reqId = ++this.weatherRequestId;
                 try {
-                    const response = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,wind_speed_10m`);
+                    const response = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latStr}&longitude=${lngStr}&current=temperature_2m,wind_speed_10m`);
                     if (!response.ok) throw new Error('HTTP ' + response.status);
                     const data = await response.json();
                     if (reqId !== this.weatherRequestId) return;
                     if (data && data.current) {
+                        this._weatherCache = { lat, lng, time: Date.now() };
                         const temp = Math.round(data.current.temperature_2m);
                         const windSpeed = Math.round(data.current.wind_speed_10m);
                         document.getElementById('weatherTemp').innerHTML = `<i class="fa-solid fa-temperature-half text-red-500"></i> ${temp}°C`;
@@ -976,6 +1025,10 @@
             },
 
             addMockMapElements() {
+                // تُضاف المعالم التجريبية فقط عند فتح الرابط بـ ?demo=1
+                // لتجنب إرباك المستخدم الحقيقي بمعالم لم يضفها.
+                const isDemo = new URLSearchParams(location.search).get('demo') === '1';
+                if (!isDemo) return;
                 let seeded = false;
                 try { seeded = localStorage.getItem('redsea_seeded') === '1'; } catch (e) { console.warn(e); }
                 if (seeded || Object.keys(this.customMarkers).length > 0) return;
@@ -984,6 +1037,7 @@
                 this.addEditableMarker([21.050, 39.230], 'منطقة خطر', '*', false);
                 this.saveToLocalStorage();
                 try { localStorage.setItem('redsea_seeded', '1'); } catch (e) { console.warn(e); }
+                this.showToast('🎬 وضع العرض التجريبي (?demo=1)');
             },
 
             updateHud() {
@@ -1288,7 +1342,7 @@
                 if (confirm(`هل أنت متأكد من حذف المسار "${name}"؟`)) {
                     delete this.savedRoutes[name];
                     if (this.savedRouteLayers[name]) {
-                        this.measureLayerGroup.removeLayer(this.savedRouteLayers[name]);
+                        this.savedRouteLayerGroup.removeLayer(this.savedRouteLayers[name]);
                         delete this.savedRouteLayers[name];
                     }
                     this.saveToLocalStorage();
@@ -1366,14 +1420,14 @@
                 else if (event.alpha !== null && event.alpha !== undefined) heading = (360 - event.alpha) % 360;
                 if (heading === null || isNaN(heading)) return;
                 const target = -heading;
-                const delta = ((target - app.compassRotation + 540) % 360) - 180;
-                app.compassRotation += delta;
-                document.getElementById('blackCompassDial').style.transform = `rotate(${app.compassRotation}deg)`;
+                const delta = ((target - this.compassRotation + 540) % 360) - 180;
+                this.compassRotation += delta;
+                document.getElementById('blackCompassDial').style.transform = `rotate(${this.compassRotation}deg)`;
             },
 
-            openMpUploadModal() { 
+            openMpUploadModal() {
                 this.renderUploadedMaps();
-                this._show('mpModal'); 
+                this._show('mpModal');
             },
             closeMpUploadModal() { this._hide('mpModal'); },
 
@@ -1393,9 +1447,8 @@
                 this.measurePoints = [];
                 this.measureLine = null;
                 this.homeLine = null;
+                // امسح فقط طبقات القياس الجارية — المسارات المحفوظة تبقى ثابتة
                 this.measureLayerGroup.clearLayers();
-                this.savedRouteLayers = {};
-                Object.keys(this.savedRoutes).forEach(name => this.addSavedRouteLayer(name, this.savedRoutes[name]));
                 if (this.measureActive) {
                     btn.classList.add('circle-active');
                     this.showToast('📏 انقر على الخريطة لتحديد نقاط المسار');
@@ -1448,10 +1501,6 @@
                 this.routeLayerGroup.clearLayers();
                 if (!this.voyageDestination || !this.voyageOrigin) return;
                 this.voyageLine = L.polyline([this.voyageOrigin, this.voyageDestination], { color: '#ff7b00', weight: 5, dashArray: '10, 7' }).addTo(this.routeLayerGroup);
-                
-                // تم إزالة علامة الماركر الزرقاء المتداخلة للوجهة بناءً على طلبك لكي لا تغطي على السهم
-                // وإذا أردت فقط رسماً لخط الوجهة، الخط يوضح خط النهاية بوضوح دون تداخل أيقونة فوقه.
-
                 this.map.fitBounds([this.voyageOrigin, this.voyageDestination], { padding: [60, 60], maxZoom: 14 });
             },
 
@@ -1539,8 +1588,7 @@
             checkProximityToCenter(userLat, userLng) {
                 if (!this.voyageDestination) return;
                 const distanceMeters = this.map.distance([userLat, userLng], this.voyageDestination);
-                
-                // تنبيه الاقتراب بداية من 100 متر
+
                 if (distanceMeters <= 100 && !this.voyageArrivalWarned) {
                     this.voyageArrivalWarned = true;
                     if (navigator.vibrate) navigator.vibrate([300, 150, 300, 150, 300]);
@@ -1566,7 +1614,12 @@
                         const heading = position.coords.heading;
                         this.currentUserLatLng = [lat, lng];
                         if (speedMs != null && speedMs >= 0) {
-                            this.smoothSpeedMs = this.smoothSpeedMs == null ? speedMs : this.smoothSpeedMs * 0.7 + speedMs * 0.3;
+                            if (speedMs < 0.3) {
+                                // سرعة أقل من ~1 كم/س = متوقف فعليًا
+                                this.smoothSpeedMs = 0;
+                            } else {
+                                this.smoothSpeedMs = this.smoothSpeedMs == null ? speedMs : this.smoothSpeedMs * 0.7 + speedMs * 0.3;
+                            }
                         }
 
                         const speedKmh = speedMs != null && speedMs >= 0 ? (speedMs * 3.6).toFixed(1) : '0.0';
@@ -1575,7 +1628,6 @@
                         document.getElementById('navCourse').innerHTML = `<i class="fa-solid fa-compass text-sky-600"></i> ${courseStr}`;
                         this.updateRemainingDistanceToCenter();
 
-                        // سهم أكبر حجماً ومضبوط في الاتجاه الصحيح بناءً على heading
                         const arrowRotation = heading != null && !isNaN(heading) ? heading : 0;
                         const boatIconHtml = `<div style="width: 44px; height: 44px; transform: rotate(${arrowRotation}deg); transform-origin: center; display: flex; align-items: center; justify-content: center;"><div style="width: 40px; height: 40px; background: #0092da; border: 3px solid #ffffff; border-radius: 50%; box-shadow: 0 4px 10px rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center;"><i class="fa-solid fa-location-arrow" style="color: #ffffff; font-size: 18px; transform: rotate(-45deg);"></i></div></div>`;
 
@@ -1695,7 +1747,7 @@
                 const container = document.getElementById('uploadedMapsList');
                 if (!container) return;
                 const keys = Object.keys(this.uploadedMaps);
-                
+
                 if (keys.length === 0) {
                     container.innerHTML = '<div class="text-[10px] text-sky-200 text-center py-2">لا توجد خرائط إضافية مرفوعة.</div>';
                     return;
@@ -1730,7 +1782,26 @@
                 }, 100);
             },
 
-            buildMarkerIcon(label, icon) {
+            getTypeStyle(rawType) {
+                if (!rawType) return { color: null, isDepth: false };
+                const t = String(rawType).trim().toLowerCase();
+                const num = parseInt(t, t.startsWith('0x') ? 16 : 10);
+                if (num === 0x0700 || t.includes('0700') || t === '0x700') {
+                    return { color: null, isDepth: true };
+                }
+                if (num === 0x0102 || t.includes('0102') || t === '0x102') {
+                    return { color: '#cba274', isDepth: false };
+                }
+                if (num === 0x0304 || t.includes('0304') || t === '0x304') {
+                    return { color: '#1296e6', isDepth: false };
+                }
+                if (num === 0x0305 || t.includes('0305') || t === '0x305') {
+                    return { color: '#46bbe7', isDepth: false };
+                }
+                return { color: null, isDepth: false };
+            },
+
+            buildMarkerIcon(label, icon, customColor = null) {
                 const safe = this.esc(label);
                 const isDepth = icon === 'depth' || /^-?\d+([.,]\d+)?$/.test(String(label).trim());
                 const hasArabic = /[\u0600-\u06FF]/.test(String(label));
@@ -1743,15 +1814,18 @@
 
                 let html;
                 if (isDepth) {
-                    html = `<div style="position:absolute;left:0;top:0;transform:translate(-50%,-50%);color:#2b3e50;font-weight:800;font-size:12px;text-shadow:${textShadow};white-space:nowrap;">${safe}</div>`;
+                    const depthColor = customColor || '#2b3e50';
+                    html = `<div style="position:absolute;left:0;top:0;transform:translate(-50%,-50%);color:${depthColor};font-weight:800;font-size:12px;text-shadow:${textShadow};white-space:nowrap;">${safe}</div>`;
                 } else if (icon === 'txt') {
-                    html = `<div style="position:absolute;left:0;top:0;transform:translate(-50%,-50%);color:#1a365d;font-weight:900;font-size:12px;text-shadow:${textShadow};white-space:nowrap;">${safe}</div>`;
+                    const txtColor = customColor || '#1a365d';
+                    html = `<div style="position:absolute;left:0;top:0;transform:translate(-50%,-50%);color:${txtColor};font-weight:900;font-size:12px;text-shadow:${textShadow};white-space:nowrap;">${safe}</div>`;
                 } else if (icon === '*') {
-                    html = `<div style="position:absolute;left:-10px;top:-16px;width:20px;text-align:center;color:#dc2626;font-weight:900;font-size:30px;line-height:1;text-shadow:${textShadow};">*</div>` +
-                           (safe ? `<div class="mk-label" style="top:10px">${safe}</div>` : '');
+                    const starColor = customColor || '#dc2626';
+                    html = `<div style="position:absolute;left:-10px;top:-16px;width:20px;text-align:center;color:${starColor};font-weight:900;font-size:30px;line-height:1;text-shadow:${textShadow};">*</div>` +
+                           (safe ? `<div class="mk-label" style="top:10px;color:${customColor || '#1a365d'}">${safe}</div>` : '');
                 } else {
                     const colors = { '🐟': '#059669', '⚓': '#1e3a8a', '💡': '#fbbf24', '🌊': '#0ea5e9', '📌': '#e11d48', '🚩': '#dc2626' };
-                    const bg = colors[icon] || '#475569';
+                    const bg = customColor || colors[icon] || '#475569';
                     html = `<div style="position:absolute;left:-14px;top:-14px;width:28px;height:28px;border-radius:50%;background:${bg};border:2px solid #fff;box-shadow:0 2px 5px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;font-size:12px;">${this.esc(icon)}</div>` +
                            (safe ? `<div class="mk-label" style="top:17px">${safe}</div>` : '');
                 }
@@ -1830,7 +1904,7 @@
                     });
                     this.customMarkers = {};
                     this.savedRoutes = {};
-                    
+
                     Object.keys(this.uploadedMaps).forEach(id => {
                         this.map.removeLayer(this.uploadedMaps[id].layer);
                     });
@@ -1838,6 +1912,7 @@
                     this.renderUploadedMaps();
 
                     this.measureLayerGroup.clearLayers();
+                    this.savedRouteLayerGroup.clearLayers();
                     this.savedRouteLayers = {};
                     this.measurePoints = [];
                     this.measureLine = null;
@@ -1867,19 +1942,39 @@
                     this.showToast('⚠️ لا توجد بيانات للتصدير');
                     return;
                 }
-                let mpData = '; Generated by RedSea Chartplotter PWA\n\n';
+                const clean = s => String(s == null ? '' : s).replace(/[\r\n]+/g, ' ').trim();
+                let mpData = '; Generated by RedSea Chartplotter PWA\n';
+                mpData += '; Datum=WGS84, CodePage=1256 (Arabic)\n\n';
+                mpData += '[IMG ID]\n';
+                mpData += 'Name=RedSea Export\n';
+                mpData += 'CodePage=1256\n';
+                mpData += 'Datum=WGS84\n';
+                mpData += 'Elevation=M\n';
+                mpData += 'LBLcoding=9\n';
+                mpData += '[END-IMG ID]\n\n';
+
                 markerIds.forEach(id => {
                     const m = this.customMarkers[id];
                     const latlng = m.marker.getLatLng();
-                    const cleanLabel = String(m.label).replace(/[\r\n]+/g, ' ');
-                    mpData += `[POI]\n; ICON=${String(m.icon).replace(/[\r\n]+/g, '')}\nType=0x0100\nLabel=${cleanLabel}\nData0=(${latlng.lat.toFixed(6)},${latlng.lng.toFixed(6)})\n[END]\n\n`;
+                    const label = clean(m.label) || 'نقطة';
+                    mpData += '[POI]\n';
+                    mpData += `Type=0x0100\n`;
+                    mpData += `Label=${label}\n`;
+                    mpData += `Data0=(${latlng.lat.toFixed(6)},${latlng.lng.toFixed(6)})\n`;
+                    mpData += '[END-POI]\n\n';
                 });
+
                 routeKeys.forEach(name => {
                     const pts = this.savedRoutes[name];
                     if (pts.length < 2) return;
                     const coords = pts.map(p => `(${p[0].toFixed(6)},${p[1].toFixed(6)})`).join(',');
-                    mpData += `[POLYLINE]\nType=0x20\nLabel=${String(name).replace(/[\r\n]+/g, ' ')}\nData0=${coords}\n[END]\n\n`;
+                    mpData += '[POLYLINE]\n';
+                    mpData += `Type=0x20\n`;
+                    mpData += `Label=${clean(name) || 'مسار'}\n`;
+                    mpData += `Data0=${coords}\n`;
+                    mpData += '[END-POLYLINE]\n\n';
                 });
+
                 const blob = new Blob([mpData], { type: 'text/plain;charset=utf-8' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
@@ -1888,7 +1983,7 @@
                 a.click();
                 document.body.removeChild(a);
                 URL.revokeObjectURL(url);
-                this.showToast('💾 تم التصدير بنجاح');
+                this.showToast('💾 تم التصدير (IMG ID + WGS84 + AR)');
                 this.closeMpUploadModal();
             },
 
@@ -1910,7 +2005,7 @@
                 } else {
                     this.showToast('⚠️ صيغة الملف غير مدعومة');
                 }
-                
+
                 input.value = '';
             },
 
@@ -1919,31 +2014,28 @@
                 reader.onload = (e) => {
                     try {
                         const geojsonData = JSON.parse(e.target.result);
-                        const typeColors = {
-                            '0x0102': '#cba274', '0x102': '#cba274',
-                            '0x0304': '#1296e6', '0x304': '#1296e6',
-                            '0x0305': '#46bbe7', '0x305': '#46bbe7'
-                        };
                         const layerGroup = L.geoJSON(geojsonData, {
                             style: (feature) => {
                                 const props = feature.properties || {};
-                                const t = String(props.type || props.Type || '').trim().toLowerCase();
-                                const c = typeColors[t] || '#ffd100';
-                                return { color: c, fillColor: c, weight: 2, opacity: 0.9, fillOpacity: 0.55 };
+                                const rawType = props.type || props.Type || props.TYPE || props.mp_type || '';
+                                const st = this.getTypeStyle(rawType);
+                                const c = st.color || '#ffd100';
+                                return { color: c, fillColor: c, weight: 2, opacity: 0.95, fillOpacity: st.color ? 0.85 : 0.35 };
                             },
                             pointToLayer: (feature, latlng) => {
                                 const props = feature.properties || {};
-                                const label = props.name || props.label || props.Label || '';
-                                const t = String(props.type || props.Type || '').trim().toLowerCase();
+                                const label = String(props.name || props.label || props.Label || props.depth || props.ELEVATION || '');
+                                const rawType = props.type || props.Type || props.TYPE || props.mp_type || '';
+                                const st = this.getTypeStyle(rawType);
                                 let icon = props.icon;
                                 const smType = props.seamark_type || props['seamark:type'];
-                                
-                                if (t === '0x0700' || t === '0x700') {
+
+                                if (st.isDepth) {
                                     icon = 'depth';
                                 } else if (smType === 'rock' || smType === 'Rock') {
                                     icon = '*';
                                 }
-                                return L.marker(latlng, { icon: this.buildMarkerIcon(label, icon) });
+                                return L.marker(latlng, { icon: this.buildMarkerIcon(label, icon, st.color) });
                             },
                             onEachFeature: (feature, layer) => {
                                 const p = feature.properties;
@@ -1966,18 +2058,27 @@
                 this.showToast('⏳ جاري تهيئة قاعدة البيانات...');
                 try {
                     const SQL = await initSqlJs({ locateFile: f => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${f}` });
-                    
+
                     const reader = new FileReader();
                     reader.onload = (e) => {
                         try {
                             const Uints = new Uint8Array(e.target.result);
                             const db = new SQL.Database(Uints);
-                            
+
+                            // التحقق من أن الملف MBTiles صالح (يحتوي جدول tiles)
+                            const check = db.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='tiles'");
+                            if (!check.length || !check[0].values.length) {
+                                this.showToast('⚠️ الملف ليس MBTiles صالحًا (لا يوجد جدول tiles)');
+                                try { db.close(); } catch (_) {}
+                                return;
+                            }
+
                             const SqliteTileLayer = L.TileLayer.extend({
                                 createTile: function(coords, done) {
                                     const tile = document.createElement('img');
                                     tile.alt = '';
                                     tile.setAttribute('role', 'presentation');
+                                    const TRANSPARENT = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
                                     let blobUrl = null;
                                     try {
                                         const y = (1 << coords.z) - 1 - coords.y;
@@ -1990,9 +2091,19 @@
                                             blobUrl = URL.createObjectURL(new Blob([d], { type: isJpg ? 'image/jpeg' : 'image/png' }));
                                         }
                                     } catch (err) { blobUrl = null; }
-                                    if (!blobUrl) { setTimeout(() => done(null, tile), 0); return tile; }
+
+                                    if (!blobUrl) {
+                                        tile.src = TRANSPARENT;
+                                        setTimeout(() => done(null, tile), 0);
+                                        return tile;
+                                    }
+
                                     tile.onload = () => { URL.revokeObjectURL(blobUrl); done(null, tile); };
-                                    tile.onerror = () => { URL.revokeObjectURL(blobUrl); done(null, tile); };
+                                    tile.onerror = () => {
+                                        URL.revokeObjectURL(blobUrl);
+                                        tile.src = TRANSPARENT;
+                                        done(null, tile);
+                                    };
                                     tile.src = blobUrl;
                                     return tile;
                                 }
@@ -2002,7 +2113,7 @@
                             offlineLayer.addTo(this.map);
                             this.addUploadedMap(file.name, offlineLayer);
                             this.showToast('🗺️ تم تحميل خريطة SQLite بنجاح');
-                            
+
                         } catch (err) {
                             console.error(err);
                             this.showToast('⚠️ تعذر قراءة جداول SQLite. تأكد من أن الملف بصيغة MBTiles صحيحة.');
@@ -2035,21 +2146,19 @@
                 let currentSection = null;
                 let data = {};
                 let points = 0, shapes = 0;
-                
-                const mapLayerGroup = L.featureGroup();
 
-                const typeColors = {
-                    '0x0102': '#cba274', '0x102': '#cba274',
-                    '0x0304': '#1296e6', '0x304': '#1296e6',
-                    '0x0305': '#46bbe7', '0x305': '#46bbe7'
-                };
+                const mapLayerGroup = L.featureGroup();
 
                 const parseCoords = (raw) => {
                     const re = /\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)/g;
                     const pts = [];
                     let m;
                     while ((m = re.exec(raw)) !== null) {
-                        const lat = parseFloat(m[1]), lng = parseFloat(m[2]);
+                        let lat = parseFloat(m[1]), lng = parseFloat(m[2]);
+                        // كشف ترتيب (lng, lat): خطوط العرض لا تتجاوز ±90
+                        if (Math.abs(lat) > 90 && Math.abs(lng) <= 90) {
+                            [lat, lng] = [lng, lat];
+                        }
                         if (Math.abs(lat) <= 90 && Math.abs(lng) <= 180) pts.push([lat, lng]);
                     }
                     return pts;
@@ -2061,20 +2170,20 @@
                     if (!dataKeys.length) return;
                     const label = (attrs['Label'] || '').trim();
                     const type = (attrs['Type'] || '').trim().toLowerCase();
+                    const st = this.getTypeStyle(type);
                     const isPoint = sec === 'POI' || sec === 'RGN10' || sec === 'RGN20';
                     const isLine = sec === 'POLYLINE' || sec === 'RGN40';
                     const isPoly = sec === 'POLYGON' || sec === 'RGN80';
-                    const isDepthType = type === '0x0700' || type === '0x700';
-                    
-                    if (isPoint) {
-                        if (!label) return;
+
+                    if (isPoint || st.isDepth) {
                         const pts = parseCoords(attrs[dataKeys[0]]);
                         if (!pts.length) return;
-                        
+                        if (!label && !st.isDepth && !st.color) return;
+
                         let icon = null;
                         const smType = attrs['seamark_type'] || attrs['seamark:type'];
 
-                        if (isDepthType) {
+                        if (st.isDepth) {
                             icon = 'depth';
                         } else if (attrs.__icon) {
                             icon = attrs.__icon;
@@ -2082,18 +2191,23 @@
                             icon = '*';
                         } else if (type.includes('101') || label.includes('منار') || label.includes('Fl')) {
                             icon = '💡';
+                        } else if (st.color && !label) {
+                            icon = '📌';
                         }
 
-                        const marker = L.marker(pts[0], { icon: this.buildMarkerIcon(label, icon) });
-                        marker.bindPopup(`<div dir="rtl" class="text-xs font-bold">${this.esc(label)}</div>`);
+                        const marker = L.marker(pts[0], { icon: this.buildMarkerIcon(label, icon, st.color) });
+                        if (label) marker.bindPopup(`<div dir="rtl" class="text-xs font-bold">${this.esc(label)}</div>`);
                         marker.addTo(mapLayerGroup);
                         points++;
                     } else if (isLine || isPoly) {
-                        const pts = parseCoords(attrs[dataKeys[0]]);
-                        if (pts.length < 2) return;
-                        const color = typeColors[type] || '#ffd100';
-                        if (isLine) L.polyline(pts, { color: color, weight: 2, opacity: 0.9 }).addTo(mapLayerGroup);
-                        else L.polygon(pts, { color: color, weight: 1.5, fillColor: color, fillOpacity: 0.55 }).addTo(mapLayerGroup);
+                        const color = st.color || '#ffd100';
+                        const rings = dataKeys.map(k => parseCoords(attrs[k])).filter(r => r.length >= 2);
+                        if (!rings.length) return;
+                        if (isLine) {
+                            rings.forEach(pts => L.polyline(pts, { color: color, weight: 2.5, opacity: 0.95 }).addTo(mapLayerGroup));
+                        } else {
+                            L.polygon(rings, { color: color, weight: 1, fillColor: color, fillOpacity: st.color ? 0.85 : 0.35 }).addTo(mapLayerGroup);
+                        }
                         shapes++;
                     }
                 };
@@ -2119,7 +2233,18 @@
                         }
                     } else if (currentSection) {
                         const idx = line.indexOf('=');
-                        if (idx > 0) data[line.substring(0, idx).trim()] = line.substring(idx + 1).trim();
+                        if (idx > 0) {
+                            const rawKey = line.substring(0, idx).trim();
+                            const val = line.substring(idx + 1).trim();
+                            if (/^type$/i.test(rawKey)) data['Type'] = val;
+                            else if (/^label$/i.test(rawKey)) data['Label'] = val;
+                            else if (/^data(\d+)$/i.test(rawKey)) {
+                                const dk = 'Data' + rawKey.match(/\d+/)[0];
+                                data[dk] = data[dk] ? (data[dk] + ',' + val) : val;
+                            } else {
+                                data[rawKey] = val;
+                            }
+                        }
                     }
                 }
 
