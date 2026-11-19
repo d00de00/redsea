@@ -1,5 +1,5 @@
 /* RedSea PWA Service Worker */
-const CACHE_NAME = 'redsea-v1.7.5';
+const CACHE_NAME = 'redsea-v1.8.6';
 const TILE_CACHE = 'redsea-tiles-v1';
 const MAX_TILES = 2000;
 const APP_SHELL = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
@@ -10,7 +10,8 @@ const CDN_ASSETS = [
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
   'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css',
   'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/webfonts/fa-solid-900.woff2',
-  'https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js'
+  'https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js',
+  'https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.wasm'
 ];
 
 self.addEventListener('install', (event) => {

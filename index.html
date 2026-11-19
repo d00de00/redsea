@@ -696,7 +696,9 @@
             async requestWakeLock() {
                 if ('wakeLock' in navigator) {
                     try {
-                        this.wakeLock = await navigator.wakeLock.request('screen');
+                        if (!this.wakeLock || this.wakeLock.released) {
+                            this.wakeLock = await navigator.wakeLock.request('screen');
+                        }
                     } catch (err) {
                         console.warn('Wake Lock error:', err);
                     }
@@ -709,7 +711,7 @@
                     const osc = audioCtx.createOscillator();
                     const gain = audioCtx.createGain();
                     osc.type = 'sine';
-                    osc.frequency.setValueAtTime(880, audioCtx.currentTime); // نون عالي
+                    osc.frequency.setValueAtTime(880, audioCtx.currentTime);
                     gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
                     gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.6);
                     osc.connect(gain);
@@ -1448,10 +1450,6 @@
                 this.routeLayerGroup.clearLayers();
                 if (!this.voyageDestination || !this.voyageOrigin) return;
                 this.voyageLine = L.polyline([this.voyageOrigin, this.voyageDestination], { color: '#ff7b00', weight: 5, dashArray: '10, 7' }).addTo(this.routeLayerGroup);
-                
-                // تم إزالة علامة الماركر الزرقاء المتداخلة للوجهة بناءً على طلبك لكي لا تغطي على السهم
-                // وإذا أردت فقط رسماً لخط الوجهة، الخط يوضح خط النهاية بوضوح دون تداخل أيقونة فوقه.
-
                 this.map.fitBounds([this.voyageOrigin, this.voyageDestination], { padding: [60, 60], maxZoom: 14 });
             },
 
@@ -1540,7 +1538,6 @@
                 if (!this.voyageDestination) return;
                 const distanceMeters = this.map.distance([userLat, userLng], this.voyageDestination);
                 
-                // تنبيه الاقتراب بداية من 100 متر
                 if (distanceMeters <= 100 && !this.voyageArrivalWarned) {
                     this.voyageArrivalWarned = true;
                     if (navigator.vibrate) navigator.vibrate([300, 150, 300, 150, 300]);
@@ -1575,7 +1572,6 @@
                         document.getElementById('navCourse').innerHTML = `<i class="fa-solid fa-compass text-sky-600"></i> ${courseStr}`;
                         this.updateRemainingDistanceToCenter();
 
-                        // سهم أكبر حجماً ومضبوط في الاتجاه الصحيح بناءً على heading
                         const arrowRotation = heading != null && !isNaN(heading) ? heading : 0;
                         const boatIconHtml = `<div style="width: 44px; height: 44px; transform: rotate(${arrowRotation}deg); transform-origin: center; display: flex; align-items: center; justify-content: center;"><div style="width: 40px; height: 40px; background: #0092da; border: 3px solid #ffffff; border-radius: 50%; box-shadow: 0 4px 10px rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center;"><i class="fa-solid fa-location-arrow" style="color: #ffffff; font-size: 18px; transform: rotate(-45deg);"></i></div></div>`;
 
@@ -1750,7 +1746,7 @@
                     html = `<div style="position:absolute;left:-10px;top:-16px;width:20px;text-align:center;color:#dc2626;font-weight:900;font-size:30px;line-height:1;text-shadow:${textShadow};">*</div>` +
                            (safe ? `<div class="mk-label" style="top:10px">${safe}</div>` : '');
                 } else {
-                    const colors = { '🐟': '#059669', '⚓': '#1e3a8a', '💡': '#fbbf24', '🌊': '#0ea5e9', '📌': '#e11d48', '🚩': '#dc2626' };
+                    const colors = { '🐟': '#059669', '⚓': '#1e3a8a', '💡': '#fbbf24', '🌊': '#0ea5e9', '📌': '#e11d48', '🚩': '#dc2626', '🚢': '#1e293b' };
                     const bg = colors[icon] || '#475569';
                     html = `<div style="position:absolute;left:-14px;top:-14px;width:28px;height:28px;border-radius:50%;background:${bg};border:2px solid #fff;box-shadow:0 2px 5px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;font-size:12px;">${this.esc(icon)}</div>` +
                            (safe ? `<div class="mk-label" style="top:17px">${safe}</div>` : '');
@@ -1921,34 +1917,44 @@
                         const geojsonData = JSON.parse(e.target.result);
                         const typeColors = {
                             '0x0102': '#cba274', '0x102': '#cba274',
-                            '0x0304': '#1296e6', '0x304': '#1296e6',
-                            '0x0305': '#46bbe7', '0x305': '#46bbe7'
+                            '0x0304': '#80D0F8', '0x304': '#80D0F8', '0x10304': '#80D0F8',
+                            '0x0305': '#2B8CBE', '0x305': '#2B8CBE', '0x10305': '#2B8CBE'
                         };
                         const layerGroup = L.geoJSON(geojsonData, {
                             style: (feature) => {
                                 const props = feature.properties || {};
-                                const t = String(props.type || props.Type || '').trim().toLowerCase();
-                                const c = typeColors[t] || '#ffd100';
-                                return { color: c, fillColor: c, weight: 2, opacity: 0.9, fillOpacity: 0.55 };
+                                const t = String(props.garmin_type || props.type || props.Type || '').trim().toLowerCase();
+                                const fillColor = props.fill || typeColors[t] || '#ffd100';
+                                const strokeColor = props.stroke || fillColor;
+                                const fillOpacity = props['fill-opacity'] != null ? Number(props['fill-opacity']) : 0.55;
+                                const weight = props['stroke-width'] != null ? Number(props['stroke-width']) : 1.5;
+                                return { color: strokeColor, fillColor: fillColor, weight: weight, opacity: 0.9, fillOpacity: fillOpacity };
                             },
                             pointToLayer: (feature, latlng) => {
                                 const props = feature.properties || {};
                                 const label = props.name || props.label || props.Label || '';
-                                const t = String(props.type || props.Type || '').trim().toLowerCase();
+                                const t = String(props.garmin_type || props.type || props.Type || '').trim().toLowerCase();
                                 let icon = props.icon;
-                                const smType = props.seamark_type || props['seamark:type'];
+                                const smType = String(props.seamark_type || props['seamark:type'] || '').toLowerCase();
+                                const layerName = String(props.layer || '').toLowerCase();
                                 
-                                if (t === '0x0700' || t === '0x700') {
+                                if (t === '0x0700' || t === '0x700' || t === '0x10700' || smType === 'sounding' || layerName === 'depth_position') {
                                     icon = 'depth';
-                                } else if (smType === 'rock' || smType === 'Rock') {
+                                } else if (smType === 'rock' || layerName === 'rock' || t === '0x10408' || t === '0x1040a') {
                                     icon = '*';
+                                } else if (smType === 'wreck' || layerName === 'wreck' || t === '0x10402' || t === '0x10403') {
+                                    icon = '🚢';
                                 }
                                 return L.marker(latlng, { icon: this.buildMarkerIcon(label, icon) });
                             },
                             onEachFeature: (feature, layer) => {
                                 const p = feature.properties;
-                                if (p && (p.name || p.label || p.Label)) {
-                                    layer.bindPopup(`<div dir="rtl" class="text-xs font-bold">${this.esc(p.name || p.label || p.Label)}</div>`);
+                                if (p) {
+                                    const title = p.name || p.label || p.Label || p.category_ar;
+                                    const sub = (p.name && p.category_ar) ? `<div class="text-[10px] text-gray-600 mt-0.5">${this.esc(p.category_ar)}</div>` : '';
+                                    if (title) {
+                                        layer.bindPopup(`<div dir="rtl" class="text-xs font-bold">${this.esc(title)}${sub}</div>`);
+                                    }
                                 }
                             }
                         });
