@@ -1,5 +1,5 @@
 /* RedSea PWA Service Worker */
-const CACHE_NAME = 'redsea-v1.9.0';
+const CACHE_NAME = 'redsea-v1.7.5';
 const TILE_CACHE = 'redsea-tiles-v1';
 const MAX_TILES = 2000;
 const APP_SHELL = ['./', './index.html', './manifest.json', './icon-192.png', './icon-512.png'];
@@ -10,8 +10,7 @@ const CDN_ASSETS = [
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
   'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css',
   'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/webfonts/fa-solid-900.woff2',
-  'https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js',
-  'https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.wasm'
+  'https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js'
 ];
 
 self.addEventListener('install', (event) => {
@@ -35,11 +34,6 @@ self.addEventListener('activate', (event) => {
       .map((key) => caches.delete(key)));
     await self.clients.claim();
   })());
-});
-
-// يسمح للصفحة بإجبار SW جديد على استلام التحكم فورًا
-self.addEventListener('message', (event) => {
-  if (event.data === 'SKIP_WAITING') self.skipWaiting();
 });
 
 self.addEventListener('fetch', (event) => {
