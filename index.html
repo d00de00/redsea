@@ -44,6 +44,15 @@
         .custom-scale-box { position: absolute; bottom: calc(16px + var(--sab)); left: calc(16px + var(--sal)); z-index: 20; pointer-events: none; display: flex; flex-direction: column; align-items: center; direction: ltr; }
         .custom-scale-text { font-size: 12px; font-weight: 800; color: #1f2937; text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 1px 1px 0 #fff; margin-bottom: 2px; }
         .custom-scale-line { width: 70px; height: 6px; border-bottom: 3px solid #1f2937; border-left: 3px solid #1f2937; border-right: 3px solid #1f2937; box-shadow: 0 1px 0 #fff; }
+        .nav-arrow-rot { transition: transform 0.6s linear; transform-origin: 50% 50%; will-change: transform; }
+        #sailBar { position: fixed; left: 50%; transform: translateX(-50%); z-index: 30; display: none; flex-direction: column; align-items: center; gap: 6px; pointer-events: none; direction: rtl; }
+        #sailBar.show { display: flex; }
+        #sailBar button, #sailBar .sail-info { pointer-events: auto; }
+        .sail-btn { display: flex; align-items: center; gap: 8px; padding: 10px 22px; border-radius: 999px; border: 2.5px solid #fff; color: #fff; font-weight: 900; font-size: 16px; box-shadow: 0 4px 14px rgba(0,0,0,0.45); cursor: pointer; transition: transform .12s ease; }
+        .sail-btn:active { transform: scale(0.94); }
+        .sail-go { background: #16a34a; animation: pulse-ring 1.6s infinite; }
+        .sail-stop { background: #dc2626; }
+        .sail-info { background: rgba(18,43,84,0.92); color: #fff; font-size: 12px; font-weight: 800; padding: 4px 12px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.4); }
         #blackCompassDial { transition: transform 0.15s ease-out; transform-origin: 50% 50%; }
         .leaflet-popup-content-wrapper { border-radius: 12px !important; border: 2px solid #1f3c73; font-family: 'Cairo', sans-serif; text-align: right; direction: rtl; }
         .leaflet-popup-content input, .leaflet-popup-content select { font-size: 16px; }
@@ -411,6 +420,12 @@
     </div>
 </div>
 
+<div id="sailBar" style="bottom: calc(92px + var(--sab));">
+    <div id="sailInfo" class="sail-info hidden"></div>
+    <button id="sailGoBtn" onclick="app.startSailFromMeasure()" class="sail-btn sail-go hidden"><i class="fa-solid fa-ship"></i><span>إبحار</span></button>
+    <button id="sailStopBtn" onclick="app.stopSail()" class="sail-btn sail-stop hidden"><i class="fa-solid fa-stop"></i><span>إيقاف الإبحار</span></button>
+</div>
+
 <div id="toastBox" class="fixed top-4 left-1/2 -translate-x-1/2 z-[60] flex flex-col gap-2 pointer-events-none w-[92%] max-w-xs"></div>
 
 <!-- ملف الألوان المنفصل -->
@@ -445,6 +460,11 @@ const app = {
     activeVoyage: null,
     voyageLine: null,
     voyageArrivalWarned: false,
+    sailRoute: null,
+    sailIndex: 0,
+    sailMarkers: [],
+    arrowRot: null,
+    lastFix: null,
     routeLayerGroup: null,
     savedRouteLayers: {},
     userLocationMarker: null,
@@ -587,7 +607,8 @@ const app = {
         const origin = this.currentUserLatLng ? [...this.currentUserLatLng] : [...this.refPoint];
         let bearing = this.currentHeadingDeg;
         if (bearing == null || isNaN(bearing)) {
-            bearing = this.calculateBearing(origin[0], origin[1], c.lat, c.lng);
+            const st = this.sailRoute ? this.getNavTarget() : null;
+            bearing = st ? this.calculateBearing(origin[0], origin[1], st[0], st[1]) : this.calculateBearing(origin[0], origin[1], c.lat, c.lng);
         }
         const spanMeters = Math.max(250, Math.min(25000, this.map.getBounds().getNorthEast().distanceTo(this.map.getBounds().getSouthWest()) * 0.45));
         const endPt = this.destinationFromBearing(origin[0], origin[1], bearing, spanMeters);
@@ -741,11 +762,12 @@ const app = {
 
     updateRemainingDistanceToCenter() {
         if (!this.map) return;
-        const target = this.voyageDestination;
+        const target = this.getNavTarget();
         let meters = null;
         let label = '0.00 كم';
         if (this.currentUserLatLng && target) {
             meters = this.map.distance(this.currentUserLatLng, target);
+            if (this.sailRoute) meters += this.pathLength(this.sailRoute.slice(this.sailIndex));
             label = `${(meters / 1000).toFixed(2)} كم`;
         } else if (this.currentUserLatLng) {
             const c = this.map.getCenter();
@@ -866,7 +888,12 @@ const app = {
                 this.activeVoyage = savedVoyage;
                 this.voyageOrigin = savedVoyage.origin;
                 this.voyageDestination = savedVoyage.destination;
+                if (Array.isArray(savedVoyage.waypoints) && savedVoyage.waypoints.length > 1) {
+                    this.sailRoute = savedVoyage.waypoints;
+                    this.sailIndex = Math.min(Math.max(0, savedVoyage.sailIndex || 0), savedVoyage.waypoints.length - 1);
+                }
                 this.drawVoyageRoute();
+                this.updateSailBar();
             }
             const ids = Object.keys(this.customMarkers).map(Number).filter(n => !isNaN(n));
             if (ids.length) this.markerIdCounter = Math.max(this.markerIdCounter, ...ids);
@@ -1307,6 +1334,7 @@ const app = {
         app.renderGarminTape(h);
         app.updateHeadingLine();
         app.updateHud();
+        if (app.userLocationMarker && app.compassActive) app.setArrowHeading(h);
     },
 
     openMpUploadModal() { this.renderUploadedMaps(); this._show('mpModal'); },
@@ -1332,12 +1360,14 @@ const app = {
         Object.keys(this.savedRoutes).forEach(name => this.addSavedRouteLayer(name, this.savedRoutes[name]));
         if (this.measureActive) { btn.classList.add('circle-active'); this.showToast('📏 انقر لتحديد النقاط'); }
         else { btn.classList.remove('circle-active'); this.showToast('📏 إيقاف'); }
+        this.updateSailBar();
     },
 
     handleMapClick(e) {
         if (this.voyageSelecting) {
             this.voyageDestination = [e.latlng.lat, e.latlng.lng];
             this.activeVoyage = null;
+            this.sailRoute = null; this.sailIndex = 0;
             this.voyageArrivalWarned = false;
             try { localStorage.removeItem('redsea_active_voyage'); } catch (e) {}
             this.voyageOrigin = this.currentUserLatLng ? [...this.currentUserLatLng] : (this.homePort ? [...this.homePort] : [this.map.getCenter().lat, this.map.getCenter().lng]);
@@ -1356,6 +1386,113 @@ const app = {
             this.measureLine = L.polyline(this.measurePoints, { color: '#ffd100', weight: 4, dashArray: '6, 6' }).addTo(this.measureLayerGroup);
             this.showToast(`📏 ${this.fmtDist(this.pathLength(this.measurePoints))}`);
         }
+        this.updateSailBar();
+    },
+
+    /* ================= الإبحار على المسار المحدد ================= */
+    getNavTarget() {
+        if (this.sailRoute && this.sailRoute[this.sailIndex]) return this.sailRoute[this.sailIndex];
+        return this.voyageDestination;
+    },
+
+    updateSailBar() {
+        const bar = document.getElementById('sailBar');
+        if (!bar) return;
+        const go = document.getElementById('sailGoBtn');
+        const stop = document.getElementById('sailStopBtn');
+        const info = document.getElementById('sailInfo');
+        const canGo = this.measureActive && this.measurePoints.length >= 2;
+        const sailing = !!this.sailRoute;
+        go.classList.toggle('hidden', !canGo);
+        stop.classList.toggle('hidden', !sailing);
+        let txt = '';
+        if (canGo) txt = `${this.measurePoints.length} نقاط • ${this.fmtDist(this.pathLength(this.measurePoints))}`;
+        else if (sailing) txt = `⚓ متجه للنقطة ${this.sailIndex + 1} من ${this.sailRoute.length}`;
+        info.textContent = txt;
+        info.classList.toggle('hidden', !txt);
+        bar.classList.toggle('show', canGo || sailing);
+    },
+
+    startSailFromMeasure() {
+        if (this.measurePoints.length < 2) { this.showToast('⚠️ حدد نقطتين على الأقل'); return; }
+        const pts = this.measurePoints.map(p => [p[0], p[1]]);
+        this.sailRoute = pts;
+        this.sailIndex = 0;
+        this.voyageOrigin = [...pts[0]];
+        this.voyageDestination = [...pts[pts.length - 1]];
+        this.voyageArrivalWarned = false;
+        const m = this.pathLength(pts);
+        const b = this.calculateBearing(pts[0][0], pts[0][1], pts[1][0], pts[1][1]);
+        this.activeVoyage = { name: 'إبحار', origin: [...pts[0]], destination: [...pts[pts.length - 1]], waypoints: pts, sailIndex: 0, speedKnots: 10, distanceMeters: m, bearing: b, createdAt: new Date().toISOString(), status: 'planned' };
+        try { localStorage.setItem('redsea_active_voyage', JSON.stringify(this.activeVoyage)); } catch (e) {}
+
+        // إنهاء وضع القياس مع إبقاء المسارات المحفوظة
+        this.measureActive = false;
+        const mb = document.getElementById('measureBtn'); if (mb) mb.classList.remove('circle-active');
+        this.measurePoints = []; this.measureLine = null; this.homeLine = null;
+        this.measureLayerGroup.clearLayers();
+        this.savedRouteLayers = {};
+        Object.keys(this.savedRoutes).forEach(name => this.addSavedRouteLayer(name, this.savedRoutes[name]));
+
+        this.drawVoyageRoute();
+        this.gpsActive = true;
+        this.autoFollow = true;
+        this.setGpsVisualState(true);
+        this.startLiveNavigation();
+        this.updateSailBar();
+        this.updateRemainingDistanceToCenter();
+        this.showToast(`⚓ بدأ الإبحار — ${this.fmtDist(m)}`);
+    },
+
+    stopSail() {
+        this.sailRoute = null; this.sailIndex = 0;
+        this.voyageDestination = null; this.voyageOrigin = null; this.activeVoyage = null;
+        this.voyageArrivalWarned = false;
+        if (this.routeLayerGroup) this.routeLayerGroup.clearLayers();
+        this.sailMarkers = [];
+        try { localStorage.removeItem('redsea_active_voyage'); } catch (e) {}
+        this.updateSailBar();
+        this.updateRemainingDistanceToCenter();
+        this.updateHeadingLine();
+        this.showToast('⏹️ تم إيقاف الإبحار');
+    },
+
+    updateSailMarkers() {
+        (this.sailMarkers || []).forEach((m, i) => {
+            if (!m) return;
+            const done = i < this.sailIndex, cur = i === this.sailIndex;
+            m.setStyle({ fillColor: done ? '#16a34a' : (cur ? '#ff2d55' : '#ffd100'), radius: cur ? 9 : 6 });
+        });
+    },
+
+    /* اتجاه السهم: اتجاه GPS ← اتجاه الحركة الفعلية ← البوصلة ← اتجاه النقطة التالية ← آخر اتجاه */
+    computeArrowHeading(lat, lng, hd, sp) {
+        let h = null;
+        if (hd != null && !isNaN(hd) && (sp == null || sp > 0.3)) h = hd;
+        if (this.lastFix) {
+            const d = this.map.distance(this.lastFix, [lat, lng]);
+            if (d >= 3) {
+                if (h == null) h = this.calculateBearing(this.lastFix[0], this.lastFix[1], lat, lng);
+                this.lastFix = [lat, lng];
+            }
+        } else this.lastFix = [lat, lng];
+        if (h == null && this.compassActive && this.currentHeadingDeg != null && !isNaN(this.currentHeadingDeg)) h = this.currentHeadingDeg;
+        if (h == null) {
+            const t = this.getNavTarget();
+            if (this.sailRoute && t) h = this.calculateBearing(lat, lng, t[0], t[1]);
+        }
+        if (h == null) h = this.arrowRot != null ? ((this.arrowRot % 360) + 360) % 360 : 0;
+        return h;
+    },
+
+    setArrowHeading(deg) {
+        if (deg == null || isNaN(deg)) return;
+        const cur = this.arrowRot == null ? deg : this.arrowRot;
+        const diff = ((deg - cur) % 360 + 540) % 360 - 180;
+        this.arrowRot = cur + diff;
+        const el = this.userLocationMarker && this.userLocationMarker.getElement && this.userLocationMarker.getElement();
+        const rot = el && el.querySelector('.nav-arrow-rot');
+        if (rot) rot.style.transform = `rotate(${this.arrowRot - 45}deg)`;
     },
 
     beginVoyageSelection() {
@@ -1371,8 +1508,16 @@ const app = {
         if (!this.routeLayerGroup) return;
         this.routeLayerGroup.clearLayers();
         if (!this.voyageDestination || !this.voyageOrigin) return;
-        this.voyageLine = L.polyline([this.voyageOrigin, this.voyageDestination], { color: '#ff2d55', weight: 5, dashArray: '10, 7' }).addTo(this.routeLayerGroup);
-        this.map.fitBounds([this.voyageOrigin, this.voyageDestination], { padding: [60, 60], maxZoom: 14 });
+        const pts = (this.sailRoute && this.sailRoute.length > 1) ? this.sailRoute : [this.voyageOrigin, this.voyageDestination];
+        this.voyageLine = L.polyline(pts, { color: '#ff2d55', weight: 5, dashArray: '10, 7' }).addTo(this.routeLayerGroup);
+        this.sailMarkers = [];
+        if (this.sailRoute && this.sailRoute.length > 1) {
+            this.sailRoute.forEach(pt => {
+                this.sailMarkers.push(L.circleMarker(pt, { radius: 6, color: '#fff', fillColor: '#ffd100', fillOpacity: 1, weight: 2 }).addTo(this.routeLayerGroup));
+            });
+            this.updateSailMarkers();
+        }
+        this.map.fitBounds(pts, { padding: [60, 60], maxZoom: 14 });
     },
 
     updateVoyageDetails() {
@@ -1419,9 +1564,11 @@ const app = {
     cancelVoyage() {
         this.voyageSelecting = false;
         this.voyageDestination = null; this.voyageOrigin = null; this.activeVoyage = null;
+        this.sailRoute = null; this.sailIndex = 0;
         this.voyageArrivalWarned = false;
         if (this.routeLayerGroup) this.routeLayerGroup.clearLayers();
         try { localStorage.removeItem('redsea_active_voyage'); } catch (e) {}
+        this.updateSailBar();
         this.closeVoyageModal();
         this.updateRemainingDistanceToCenter();
         this.showToast('ألغي');
@@ -1448,8 +1595,29 @@ const app = {
     },
 
     checkProximityToCenter(lat, lng) {
-        if (!this.voyageDestination) return;
-        const d = this.map.distance([lat, lng], this.voyageDestination);
+        const target = this.getNavTarget();
+        if (!target) return;
+        const d = this.map.distance([lat, lng], target);
+        if (this.sailRoute) {
+            const last = this.sailRoute.length - 1;
+            if (d <= 100) {
+                if (this.sailIndex < last) {
+                    this.sailIndex++;
+                    if (this.activeVoyage) { this.activeVoyage.sailIndex = this.sailIndex; try { localStorage.setItem('redsea_active_voyage', JSON.stringify(this.activeVoyage)); } catch (e) {} }
+                    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+                    this.playProximityAlert();
+                    this.updateSailMarkers();
+                    this.updateSailBar();
+                    this.showToast(`✅ تم بلوغ النقطة ${this.sailIndex} — التالية ${this.sailIndex + 1}/${this.sailRoute.length}`);
+                } else if (!this.voyageArrivalWarned) {
+                    this.voyageArrivalWarned = true;
+                    if (navigator.vibrate) navigator.vibrate([300, 150, 300, 150, 300]);
+                    this.playProximityAlert();
+                    this.showToast('🏁 وصلت إلى الوجهة');
+                }
+            } else if (d > 150 && this.sailIndex === last) this.voyageArrivalWarned = false;
+            return;
+        }
         if (d <= 100 && !this.voyageArrivalWarned) {
             this.voyageArrivalWarned = true;
             if (navigator.vibrate) navigator.vibrate([300, 150, 300, 150, 300]);
@@ -1483,13 +1651,14 @@ const app = {
                 if (hd != null && !isNaN(hd) && !this.compassActive) this.renderGarminTape(hd);
                 this.updateHeadingLine();
                 this.updateRemainingDistanceToCenter();
-                const ar = hd != null && !isNaN(hd) ? hd : 0;
-                const bh = `<div style="width:44px;height:44px;transform:rotate(${ar}deg);display:flex;align-items:center;justify-content:center;"><div style="width:40px;height:40px;background:#0092da;border:3px solid #fff;border-radius:50%;box-shadow:0 4px 10px rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;"><i class="fa-solid fa-location-arrow" style="color:#fff;font-size:18px;transform:rotate(-45deg);"></i></div></div>`;
+                const ar = this.computeArrowHeading(lat, lng, hd, sm);
                 if (!this.userLocationMarker) {
-                    this.userLocationMarker = L.marker([lat, lng], { icon: L.divIcon({ className: '', html: bh, iconSize: [44, 44], iconAnchor: [22, 22] }) }).addTo(this.map);
+                    this.arrowRot = ar;
+                    const bh = `<div style="width:44px;height:44px;display:flex;align-items:center;justify-content:center;"><div style="width:40px;height:40px;background:#0092da;border:3px solid #fff;border-radius:50%;box-shadow:0 4px 10px rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;"><i class="fa-solid fa-location-arrow nav-arrow-rot" style="color:#fff;font-size:18px;transform:rotate(${ar - 45}deg);"></i></div></div>`;
+                    this.userLocationMarker = L.marker([lat, lng], { icon: L.divIcon({ className: '', html: bh, iconSize: [44, 44], iconAnchor: [22, 22] }), zIndexOffset: 1000 }).addTo(this.map);
                 } else {
                     this.userLocationMarker.setLatLng([lat, lng]);
-                    this.userLocationMarker.setIcon(L.divIcon({ className: '', html: bh, iconSize: [44, 44], iconAnchor: [22, 22] }));
+                    this.setArrowHeading(ar);
                 }
                 if (!this.userAccuracyCircle) this.userAccuracyCircle = L.circle([lat, lng], { radius: acc, color: '#ffd100', fillColor: '#ffd100', fillOpacity: 0.15 }).addTo(this.map);
                 else this.userAccuracyCircle.setLatLng([lat, lng]).setRadius(acc);
@@ -1524,6 +1693,7 @@ const app = {
         if (this.liveWatchId !== null) { navigator.geolocation.clearWatch(this.liveWatchId); this.liveWatchId = null; }
         this.autoFollow = false;
         this.currentUserLatLng = null; this.smoothSpeedMs = null; this.currentHeadingDeg = null;
+        this.lastFix = null; this.arrowRot = null;
         const lb = document.getElementById('locateBtn'); if (lb) lb.classList.remove('circle-active');
         if (this.userLocationMarker) { this.map.removeLayer(this.userLocationMarker); this.userLocationMarker = null; }
         if (this.userAccuracyCircle) { this.map.removeLayer(this.userAccuracyCircle); this.userAccuracyCircle = null; }
@@ -1990,4 +2160,3 @@ window.addEventListener('DOMContentLoaded', () => app.init());
 </script>
 </body>
 </html>
-```[cite: 4, 8]
